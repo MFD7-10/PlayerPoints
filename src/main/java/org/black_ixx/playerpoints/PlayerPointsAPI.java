@@ -6,6 +6,7 @@ import java.util.Objects;
 import java.util.UUID;
 import org.black_ixx.playerpoints.event.PlayerPointsChangeEvent;
 import org.black_ixx.playerpoints.event.PlayerPointsResetEvent;
+import org.black_ixx.playerpoints.event.PointInsufficientEvent;
 import org.black_ixx.playerpoints.manager.DataManager;
 import org.black_ixx.playerpoints.manager.LocaleManager;
 import org.black_ixx.playerpoints.models.SortedPlayer;
@@ -239,7 +240,32 @@ public class PlayerPointsAPI {
         if (event.isCancelled())
             return false;
 
-        return dataManager.setPoints(TransactionType.SET, playerId, "Set", sourceId, points + event.getChange());
+        int finalAmount = points + event.getChange();
+        if (finalAmount < 0) {
+            if (PointInsufficientEvent.isReentrant())
+                return false;
+
+            PointInsufficientEvent.setReentrant(true);
+            try {
+                PointInsufficientEvent insufficientEvent = new PointInsufficientEvent(playerId, -event.getChange(), points);
+                Bukkit.getPluginManager().callEvent(insufficientEvent);
+
+                if (insufficientEvent.isCancelled())
+                    return false;
+
+                if (!insufficientEvent.isResolved())
+                    return false;
+
+                points = dataManager.getEffectivePoints(playerId);
+                finalAmount = points + event.getChange();
+                if (finalAmount < 0)
+                    return false;
+            } finally {
+                PointInsufficientEvent.setReentrant(false);
+            }
+        }
+
+        return dataManager.setPoints(TransactionType.SET, playerId, "Set", sourceId, finalAmount);
     }
 
     /**

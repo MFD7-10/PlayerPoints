@@ -42,6 +42,7 @@ import org.black_ixx.playerpoints.database.migrations._1_Create_Tables;
 import org.black_ixx.playerpoints.database.migrations._2_Add_Table_Username_Cache;
 import org.black_ixx.playerpoints.database.migrations._3_Add_Table_Transaction_Log;
 import org.black_ixx.playerpoints.listeners.PointsMessageListener;
+import org.black_ixx.playerpoints.event.PointInsufficientEvent;
 import org.black_ixx.playerpoints.models.PendingTransaction;
 import org.black_ixx.playerpoints.models.SortedPlayer;
 import org.black_ixx.playerpoints.models.TransactionType;
@@ -313,8 +314,28 @@ public class DataManager extends AbstractDataManager implements Listener {
      */
     public boolean offsetPoints(TransactionType transactionType, UUID playerId, String sourceDescription, UUID source, int amount) {
         int points = this.getEffectivePoints(playerId);
-        if (points + amount < 0)
-            return false;
+        if (points + amount < 0) {
+            if (PointInsufficientEvent.isReentrant())
+                return false;
+
+            PointInsufficientEvent.setReentrant(true);
+            try {
+                PointInsufficientEvent insufficientEvent = new PointInsufficientEvent(playerId, -amount, points);
+                Bukkit.getPluginManager().callEvent(insufficientEvent);
+
+                if (insufficientEvent.isCancelled())
+                    return false;
+
+                if (!insufficientEvent.isResolved())
+                    return false;
+
+                points = this.getEffectivePoints(playerId);
+                if (points + amount < 0)
+                    return false;
+            } finally {
+                PointInsufficientEvent.setReentrant(false);
+            }
+        }
 
         this.getPendingTransactions(playerId).add(new PendingTransaction(UpdateType.OFFSET, transactionType, sourceDescription, source, amount));
         return true;
